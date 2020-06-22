@@ -11,7 +11,9 @@ Pinostic is a simple GUI tool written in python with the intention of being used
 * A car with an OBD port
 ### Software
 * python3
-* python modules obd and pygame2
+* python modules:
+    * obd
+    * pygame2
 
 ### PiGRRL Setup
 If you happen to have a PiGRRL you can follow these steps to achieve the same setup I am rocking:
