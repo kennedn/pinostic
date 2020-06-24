@@ -30,14 +30,17 @@ class CommandObj:
     # data callback, obd async will update text when new data is available
     def update_data(self, value):
         # Format pint values to be more consice
+        value = value.value if value is not None else ""
         if value.u == Unit.percent:
             self.data = "{:.2f}%".format(value.m)
         elif value.u == Unit.celsius:
             self.data = "{:d}c".format(value.m)
         elif value.u == Unit.second:
-            self.data = "{:d}s".format(value.m)
+            self.data = "{:.2f}s".format(value.m)
+        elif value.u == Unit.volt:
+            self.data = "{:.2f}v".format(value.m)
         else:
-            self.data = value
+            self.data = "{}".format(value)
 
     def draw(self, surface):
         title_rect = pygame.Rect(self.pad, 0,
@@ -87,7 +90,7 @@ class Button(CommandObj):
 
 
 class Graph(CommandObj):
-    def __init__(self, command, font, text_color, max_points=500, title_percent=1, alias=None):
+    def __init__(self, command, font, text_color, max_points=100, title_percent=1, alias=None):
         super().__init__(command, SCREENRECT, pygame.font.SysFont(font, 18), text_color, title_percent, alias)
         self.points = [1]
         self.times = [datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]]
@@ -98,6 +101,7 @@ class Graph(CommandObj):
                                           self.rect.height - self.title_mask.get_height() - self.pad))
         self.graph_rect = self.base_graph.get_rect()
         self.recording = False
+        self.obd_connect()
 
     def save_csv(self):
         if len(self.historic_points) > 1:
@@ -107,9 +111,20 @@ class Graph(CommandObj):
                     file.write("{},{}\n".format(p[1], p[0]))
             self.historic_points = []
 
+    def obd_connect(self):
+        if len(obd.scan_serial()) > 0:
+            self.conn = obd.Async()
+            self.conn.watch(self.command, callback=self.update_data)
+            self.conn.start()
+        else:
+            print("No serial ports available")
+
+    def obd_disconnect(self):
+        self.conn.stop()
+
     def update_data(self, value):
         super().update_data(value)
-        self.points.append(value.m)
+        self.points.append(value.value.m)
         self.times.append(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])
 
         if len(self.points) > self.max_points:
@@ -123,7 +138,7 @@ class Graph(CommandObj):
                         self.graph_rect.height - (self.graph_rect.height / max(self.points) * self.points[i]))
                        for i in range(len(self.points))]
 
-        self.title = self.font.render("{}: {:d}, {:d}, {:.0f}".format(
+        self.title = self.font.render("{}: {:.2f}, {:.2f}, {:.0f}".format(
                                       self.alias, min(self.points), max(self.points),
                                       sum(self.points) / len(self.points)), True, fg_color)
         self.title_mask = pygame.Surface((self.rect.width * 1 - self.pad, self.title.get_height()), pygame.SRCALPHA)
@@ -135,8 +150,9 @@ class Graph(CommandObj):
         rect = pygame.Rect(0, self.pad + self.title_mask.get_height(),
                            self.graph_rect.width, self.graph_rect.height)
         self.base_graph.fill(highlight_color)
-        pygame.draw.polygon(self.base_graph, fg_color,
-                            (*self.coords, self.graph_rect.bottomright, self.graph_rect.bottomleft))
+        if len(self.coords) >= 2:
+            pygame.draw.polygon(self.base_graph, fg_color,
+                                (*self.coords, self.graph_rect.bottomright, self.graph_rect.bottomleft))
 
         surface.blit(self.base_graph, rect)
 
@@ -184,6 +200,9 @@ class Menu:
             self.conn.start()
         else:
             print("No serial ports available")
+
+    def obd_disconnect(self):
+        self.conn.stop()
 
     # Move cursor down one item
     def cursor_down(self):
@@ -265,24 +284,24 @@ highlight_color = (0, 30, 2)
 
 # --- Objects
 menu = Menu((obd.commands.SPEED,
-             (obd.commands.COOLANT_TEMP, "coolant"),
              obd.commands.RUN_TIME,
-             (obd.commands.RELATIVE_ACCEL_POS, "accel ped"),
+             (obd.commands.COOLANT_TEMP, "coolant"),
              obd.commands.FUEL_LEVEL,
              (obd.commands.AMBIANT_AIR_TEMP, "Air")),
             3, 'Ubuntu')
 
 # Simulate some test data
-if DEBUG >= 1:
+if DEBUG >= 2:
     menu.buttons[0].update_data(10 / 3 * Unit.percent)
     menu.buttons[1].update_data(Unit.Quantity(67, Unit.celsius))
-    menu.buttons[2].update_data(300 * Unit.second)
+    menu.buttons[2].update_data(3.3, Unit.volt)
     menu.buttons[3].update_data(800 / 34 * Unit.percent)
     menu.buttons[4].update_data(1200 / 154 * Unit.percent)
     menu.buttons[5].update_data(Unit.Quantity(21000000, Unit.celsius))
 
 
-graph = Graph(obd.commands.SPEED, 'Ubuntu', fg_color)
+# graph = Graph(obd.commands.SPEED, 'Ubuntu', fg_color)
+graph = None
 wait_sec = randint(1, 100)
 counter = 0
 value = randint(0, 100)
@@ -301,15 +320,18 @@ while not done:
                     menu.cursor_up()
                 elif event.key == pygame.K_DOWN:
                     menu.cursor_down()
-                elif event.key == pygame.K_a:
+                elif event.key == pygame.K_c:
                     menu.obd_connect()
-                elif event.key == pygame.K_s:
+                elif event.key == pygame.K_z:
+                    menu.obd_disconnect()
                     graph = Graph(menu.visible_buttons[menu.cursor_ptr].command, 'Ubuntu', fg_color)
                     state = GameState.GRAPH
             elif state == GameState.GRAPH:
-                if event.key == pygame.K_s:
+                if event.key == pygame.K_x:
+                    graph.obd_disconnect()
                     state = GameState.MENU
-                elif event.key == pygame.K_q:
+                    menu.obd_connect()
+                elif event.key == pygame.K_c:
                     if graph.recording:
                         graph.recording = False
                         graph.save_csv()
@@ -317,32 +339,34 @@ while not done:
                         graph.recording = True
 
             if DEBUG > 0:
-                if event.key == pygame.K_COMMA:
+                if event.key == pygame.K_ESCAPE:
                     DEBUG = max(1, DEBUG - 1)
                     print("Debug Level: {}".format(DEBUG))
-                elif event.key == pygame.K_PERIOD:
+                elif event.key == pygame.K_LCTRL:
                     DEBUG = min(10, DEBUG + 1)
                     print("Debug Level: {}".format(DEBUG))
                 elif event.key == pygame.K_0:
                     print(graph.points)
 
     if state == GameState.MENU:
-        if counter < wait_sec:
-            menu.buttons[1].update_data(Unit.Quantity(value, Unit.celsius))
-            counter += 1
-        elif counter >= wait_sec:
-            counter = 0
-            wait_sec = randint(1, 100)
-            value = randint(0, 100)
+        if DEBUG >= 2:
+            if counter < wait_sec:
+                menu.buttons[1].update_data(Unit.Quantity(value, Unit.celsius))
+                counter += 1
+            elif counter >= wait_sec:
+                counter = 0
+                wait_sec = randint(1, 100)
+                value = randint(0, 100)
         menu.draw(screen)
     elif state == GameState.GRAPH:
-        if counter < wait_sec:
-            graph.update_data(Unit.Quantity(value, Unit.celsius))
-            counter += 1
-        elif counter >= wait_sec:
-            counter = 0
-            wait_sec = randint(1, 100)
-            value = randint(0, 100)
+        if DEBUG >= 2:
+            if counter < wait_sec:
+                graph.update_data(Unit.Quantity(value, Unit.celsius))
+                counter += 1
+            elif counter >= wait_sec:
+                counter = 0
+                wait_sec = randint(1, 100)
+                value = randint(0, 100)
         graph.draw(screen)
     # --- --- End Object Draws
     pygame.display.flip()
